@@ -3,104 +3,84 @@ import pandas as pd
 import requests
 from datetime import datetime, date
 
-DATA_INICIAL_SERIE = datetime(1980, 1, 1)
+# Função para converter código AAAAMM em datetime
+def codigo_para_datetime(codigo):
+    codigo_str = str(codigo)
+    ano = int(codigo_str[:4])
+    mes = int(codigo_str[4:6])
+    return datetime(ano, mes, 1)
 
-def get_ultima_data_disponivel():
-    url = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4449/dados/ultimos/1?formato=json'
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if not data:
-            return datetime.today()
-        ultima_data = pd.to_datetime(data[0]['data'], dayfirst=True)
-        return ultima_data
-    except Exception:
-        return datetime.today()
+# Função para buscar e preparar os dados do IBGE
+@st.cache_data
+def carregar_dados_ipca():
+    url = "https://apisidra.ibge.gov.br/values/t/1737/n1/all/v/all/p/all/d/v63%202,v69%202,v2266%2013,v2263%202,v2264%202,v2265%202?formato=json"
+    response = requests.get(url)
+    dados_json = response.json()
+    df = pd.DataFrame(dados_json[1:])  # Ignora cabeçalho
+    df = df[df['D2C'] == '2266']       # Filtra número-índice IPCA
+    df['data'] = df['D3C'].apply(codigo_para_datetime)
+    df['valor'] = pd.to_numeric(df['V'], errors='coerce')
+    df = df.sort_values('data').reset_index(drop=True)
+    return df
 
-DATA_FINAL_SERIE = get_ultima_data_disponivel()
+# Função para calcular IPCA composto
+def calcular_ipca_composto(df, data_inicial, data_final, valor_inicial):
+    df_periodo = df[(df['data'] >= data_inicial) & (df['data'] <= data_final)].copy()
+    if df_periodo.empty:
+        return None, None, None
+    df_periodo['var_mes'] = df_periodo['valor'].pct_change().fillna(0)
+    ipca_acumulado = (1 + df_periodo['var_mes']).prod() - 1
+    valor_corrigido = valor_inicial * (1 + ipca_acumulado)
+    return ipca_acumulado, valor_corrigido, df_periodo
 
-def to_datetime(dt):
-    if isinstance(dt, datetime):
-        return dt
-    elif isinstance(dt, date):
-        return datetime(dt.year, dt.month, dt.day)
-    elif isinstance(dt, str):
-        for fmt in ('%Y-%m-%d', '%d/%m/%Y'):
-            try:
-                return datetime.strptime(dt, fmt)
-            except ValueError:
-                continue
-        return None
-    else:
-        return None
+# Função para aplicar taxa prefixada anual
+def aplicar_taxa_prefixada(valor_corrigido, taxa_aa, meses):
+    taxa_mensal = (1 + taxa_aa) ** (1/12) - 1
+    return valor_corrigido * ((1 + taxa_mensal) ** meses)
 
-def get_ipca_data(data_inicial, data_final):
-    di = data_inicial.strftime('%d/%m/%Y')
-    df = data_final.strftime('%d/%m/%Y')
-    url = f'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4449/dados?formato=json&dataInicial={di}&dataFinal={df}'
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if not data:
-            st.error('Nenhum dado encontrado para o período selecionado.')
-            return pd.DataFrame()
-        df = pd.DataFrame(data)
-        df['data'] = pd.to_datetime(df['data'], dayfirst=True)
-        df['valor'] = pd.to_numeric(df['valor'], errors='coerce')
-        df = df.dropna(subset=['valor'])
-        return df
-    except requests.exceptions.RequestException as e:
-        st.error(f'Erro na consulta à API do Banco Central: {e}')
-        return pd.DataFrame()
-    except ValueError:
-        st.error('Erro ao processar os dados retornados pela API.')
-        return pd.DataFrame()
+# Carrega dados do IBGE
+df_ipca = carregar_dados_ipca()
+
+# Determina datas mínima e máxima disponíveis
+DATA_INICIAL_SERIE = df_ipca['data'].min().date()
+DATA_FINAL_SERIE = df_ipca['data'].max().date()
 
 # Interface Streamlit
-st.title('Calculadora de Correção pelo IPCA (com validação de datas)')
+st.title('Calculadora de Correção pelo IPCA (dados IBGE/SIDRA)')
 
 data_inicial = st.date_input(
     'Data Inicial',
-    value=DATA_INICIAL_SERIE.date(),
-    min_value=DATA_INICIAL_SERIE.date(),
-    max_value=DATA_FINAL_SERIE.date()
+    value=DATA_INICIAL_SERIE,
+    min_value=DATA_INICIAL_SERIE,
+    max_value=DATA_FINAL_SERIE
 )
 data_final = st.date_input(
     'Data Final',
-    value=DATA_FINAL_SERIE.date(),
-    min_value=DATA_INICIAL_SERIE.date(),
-    max_value=DATA_FINAL_SERIE.date()
+    value=DATA_FINAL_SERIE,
+    min_value=DATA_INICIAL_SERIE,
+    max_value=DATA_FINAL_SERIE
 )
-
 valor_inicial = st.number_input('Valor a ser corrigido', min_value=0.0, value=1000.0)
 taxa_aa = st.number_input('Taxa anual prefixada (%)', min_value=0.0, value=0.0) / 100
 
-# Conversão para datetime
-data_inicial_dt = to_datetime(data_inicial)
-data_final_dt = to_datetime(data_final)
+data_inicial_dt = datetime(data_inicial.year, data_inicial.month, 1)
+data_final_dt = datetime(data_final.year, data_final.month, 1)
 
-# Validação do intervalo de 10 anos
-if data_inicial_dt and data_final_dt:
-    if data_inicial_dt > data_final_dt:
-        st.error('Data inicial não pode ser superior à data final.')
+if data_inicial_dt > data_final_dt:
+    st.error('Data inicial não pode ser superior à data final.')
+else:
+    ipca_acumulado, valor_corrigido_ipca, df_mensal = calcular_ipca_composto(
+        df_ipca, data_inicial_dt, data_final_dt, valor_inicial
+    )
+    if ipca_acumulado is not None:
+        meses = (data_final_dt.year - data_inicial_dt.year) * 12 + (data_final_dt.month - data_inicial_dt.month)
+        valor_corrigido_taxa = aplicar_taxa_prefixada(valor_corrigido_ipca, taxa_aa, meses)
+        st.write(f'IPCA acumulado no período: {ipca_acumulado:.4%}')
+        st.write(f'Valor corrigido pelo IPCA: R$ {valor_corrigido_ipca:.2f}')
+        st.write(f'Valor corrigido pelo IPCA mais taxa prefixada: R$ {valor_corrigido_taxa:.2f}')
+        st.write('Valores mensais do IPCA no período:')
+        st.dataframe(df_mensal[['data', 'valor', 'var_mes']].rename(
+            columns={'data': 'Data', 'valor': 'Índice IPCA', 'var_mes': 'Variação Mensal'}
+        ).set_index('Data'))
     else:
-        anos = (data_final_dt.year - data_inicial_dt.year) + ((data_final_dt.month - data_inicial_dt.month) / 12)
-        if anos > 10:
-            st.warning('O intervalo máximo permitido pela API é de 10 anos. '
-                       'Por favor, selecione um período de até 10 anos.')
-        else:
-            df_ipca = get_ipca_data(data_inicial_dt, data_final_dt)
-            if not df_ipca.empty:
-                ipca_acumulado = (df_ipca['valor'] / 100 + 1).prod() - 1
-                valor_corrigido_ipca = valor_inicial * (1 + ipca_acumulado)
-                meses = (data_final_dt.year - data_inicial_dt.year) * 12 + (data_final_dt.month - data_inicial_dt.month)
-                taxa_mensal = (1 + taxa_aa) ** (1/12) - 1
-                valor_corrigido_taxa = valor_corrigido_ipca * ((1 + taxa_mensal) ** meses)
-
-                st.write(f'IPCA acumulado no período: {ipca_acumulado:.4%}')
-                st.write(f'Valor corrigido pelo IPCA: R$ {valor_corrigido_ipca:.2f}')
-                st.write(f'Valor corrigido pelo IPCA mais taxa prefixada: R$ {valor_corrigido_taxa:.2f}')
-                st.write('Valores mensais do IPCA no período:')
-                st.dataframe(df_ipca.set_index('data'))
+        st.warning('Não há dados disponíveis para o período selecionado.')
