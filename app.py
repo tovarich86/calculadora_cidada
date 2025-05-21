@@ -5,20 +5,53 @@ from datetime import datetime
 
 # Datas limites conhecidas para o IPCA (ajuste conforme atualização da série)
 DATA_INICIAL_SERIE = datetime(1980, 1, 1)
-DATA_FINAL_SERIE = datetime.today()
+
+def get_ultima_data_disponivel():
+    # Busca a última data disponível na série IPCA
+    url = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4449/dados/ultimos/1?formato=json'
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if not data:
+            return datetime.today()
+        ultima_data = pd.to_datetime(data[0]['data'], dayfirst=True)
+        return ultima_data
+    except Exception:
+        return datetime.today()
+
+DATA_FINAL_SERIE = get_ultima_data_disponivel()
+
+def to_datetime(date):
+    if isinstance(date, str):
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y'):
+            try:
+                return datetime.strptime(date, fmt)
+            except ValueError:
+                continue
+        return None
+    elif isinstance(date, datetime):
+        return date
+    else:
+        return None
 
 def validar_datas(data_inicial, data_final):
-    # Ajusta datas para o range disponível na série
+    data_inicial = to_datetime(data_inicial)
+    data_final = to_datetime(data_final)
+    if data_inicial is None or data_final is None:
+        st.error('Formato de data inválido. Use dd/mm/aaaa ou selecione no calendário.')
+        return None, None
     if data_inicial < DATA_INICIAL_SERIE:
         st.warning(f'Data inicial ajustada para {DATA_INICIAL_SERIE.strftime("%d/%m/%Y")} (início da série).')
         data_inicial = DATA_INICIAL_SERIE
     if data_final > DATA_FINAL_SERIE:
-        st.warning(f'Data final ajustada para {DATA_FINAL_SERIE.strftime("%d/%m/%Y")} (último dado disponível).')
+        st.warning(
+            f'Data final ajustada para {DATA_FINAL_SERIE.strftime("%d/%m/%Y")} (último dado disponível na série IPCA).'
+        )
         data_final = DATA_FINAL_SERIE
     if data_inicial > data_final:
         st.error('Data inicial não pode ser superior à data final.')
         return None, None
-    # Limite de 10 anos por requisição
     anos = (data_final.year - data_inicial.year) + ((data_final.month - data_inicial.month) / 12)
     if anos > 10:
         st.error('O intervalo máximo permitido pela API é de 10 anos.')
@@ -26,7 +59,6 @@ def validar_datas(data_inicial, data_final):
     return data_inicial, data_final
 
 def get_ipca_data(data_inicial, data_final):
-    # Formata datas para dd/MM/yyyy
     di = data_inicial.strftime('%d/%m/%Y')
     df = data_final.strftime('%d/%m/%Y')
     url = f'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4449/dados?formato=json&dataInicial={di}&dataFinal={df}'
@@ -50,7 +82,7 @@ def get_ipca_data(data_inicial, data_final):
         return pd.DataFrame()
 
 # Interface Streamlit
-st.title('Calculadora Otimizada de Correção pelo IPCA')
+st.title('Calculadora de Correção pelo IPCA (com validação de datas)')
 
 data_inicial = st.date_input('Data Inicial', DATA_INICIAL_SERIE)
 data_final = st.date_input('Data Final', DATA_FINAL_SERIE)
