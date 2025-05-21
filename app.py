@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime
+from datetime import datetime, date
 
-# Datas limites conhecidas para o IPCA (ajuste conforme atualização da série)
 DATA_INICIAL_SERIE = datetime(1980, 1, 1)
 
 def get_ultima_data_disponivel():
-    # Busca a última data disponível na série IPCA
     url = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4449/dados/ultimos/1?formato=json'
     try:
         response = requests.get(url, timeout=10)
@@ -22,16 +20,18 @@ def get_ultima_data_disponivel():
 
 DATA_FINAL_SERIE = get_ultima_data_disponivel()
 
-def to_datetime(date):
-    if isinstance(date, str):
+def to_datetime(dt):
+    if isinstance(dt, datetime):
+        return dt
+    elif isinstance(dt, date):
+        return datetime(dt.year, dt.month, dt.day)
+    elif isinstance(dt, str):
         for fmt in ('%Y-%m-%d', '%d/%m/%Y'):
             try:
-                return datetime.strptime(date, fmt)
+                return datetime.strptime(dt, fmt)
             except ValueError:
                 continue
         return None
-    elif isinstance(date, datetime):
-        return date
     else:
         return None
 
