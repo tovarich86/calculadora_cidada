@@ -35,29 +35,6 @@ def to_datetime(dt):
     else:
         return None
 
-def validar_datas(data_inicial, data_final):
-    data_inicial = to_datetime(data_inicial)
-    data_final = to_datetime(data_final)
-    if data_inicial is None or data_final is None:
-        st.error('Formato de data inválido. Use dd/mm/aaaa ou selecione no calendário.')
-        return None, None
-    if data_inicial < DATA_INICIAL_SERIE:
-        st.warning(f'Data inicial ajustada para {DATA_INICIAL_SERIE.strftime("%d/%m/%Y")} (início da série).')
-        data_inicial = DATA_INICIAL_SERIE
-    if data_final > DATA_FINAL_SERIE:
-        st.warning(
-            f'Data final ajustada para {DATA_FINAL_SERIE.strftime("%d/%m/%Y")} (último dado disponível na série IPCA).'
-        )
-        data_final = DATA_FINAL_SERIE
-    if data_inicial > data_final:
-        st.error('Data inicial não pode ser superior à data final.')
-        return None, None
-    anos = (data_final.year - data_inicial.year) + ((data_final.month - data_inicial.month) / 12)
-    if anos > 10:
-        st.error('O intervalo máximo permitido pela API é de 10 anos.')
-        return None, None
-    return data_inicial, data_final
-
 def get_ipca_data(data_inicial, data_final):
     di = data_inicial.strftime('%d/%m/%Y')
     df = data_final.strftime('%d/%m/%Y')
@@ -84,24 +61,46 @@ def get_ipca_data(data_inicial, data_final):
 # Interface Streamlit
 st.title('Calculadora de Correção pelo IPCA (com validação de datas)')
 
-data_inicial = st.date_input('Data Inicial', DATA_INICIAL_SERIE)
-data_final = st.date_input('Data Final', DATA_FINAL_SERIE)
+data_inicial = st.date_input(
+    'Data Inicial',
+    value=DATA_INICIAL_SERIE.date(),
+    min_value=DATA_INICIAL_SERIE.date(),
+    max_value=DATA_FINAL_SERIE.date()
+)
+data_final = st.date_input(
+    'Data Final',
+    value=DATA_FINAL_SERIE.date(),
+    min_value=DATA_INICIAL_SERIE.date(),
+    max_value=DATA_FINAL_SERIE.date()
+)
+
 valor_inicial = st.number_input('Valor a ser corrigido', min_value=0.0, value=1000.0)
 taxa_aa = st.number_input('Taxa anual prefixada (%)', min_value=0.0, value=0.0) / 100
 
-data_inicial, data_final = validar_datas(data_inicial, data_final)
+# Conversão para datetime
+data_inicial_dt = to_datetime(data_inicial)
+data_final_dt = to_datetime(data_final)
 
-if data_inicial and data_final:
-    df_ipca = get_ipca_data(data_inicial, data_final)
-    if not df_ipca.empty:
-        ipca_acumulado = (df_ipca['valor'] / 100 + 1).prod() - 1
-        valor_corrigido_ipca = valor_inicial * (1 + ipca_acumulado)
-        meses = (data_final.year - data_inicial.year) * 12 + (data_final.month - data_inicial.month)
-        taxa_mensal = (1 + taxa_aa) ** (1/12) - 1
-        valor_corrigido_taxa = valor_corrigido_ipca * ((1 + taxa_mensal) ** meses)
+# Validação do intervalo de 10 anos
+if data_inicial_dt and data_final_dt:
+    if data_inicial_dt > data_final_dt:
+        st.error('Data inicial não pode ser superior à data final.')
+    else:
+        anos = (data_final_dt.year - data_inicial_dt.year) + ((data_final_dt.month - data_inicial_dt.month) / 12)
+        if anos > 10:
+            st.warning('O intervalo máximo permitido pela API é de 10 anos. '
+                       'Por favor, selecione um período de até 10 anos.')
+        else:
+            df_ipca = get_ipca_data(data_inicial_dt, data_final_dt)
+            if not df_ipca.empty:
+                ipca_acumulado = (df_ipca['valor'] / 100 + 1).prod() - 1
+                valor_corrigido_ipca = valor_inicial * (1 + ipca_acumulado)
+                meses = (data_final_dt.year - data_inicial_dt.year) * 12 + (data_final_dt.month - data_inicial_dt.month)
+                taxa_mensal = (1 + taxa_aa) ** (1/12) - 1
+                valor_corrigido_taxa = valor_corrigido_ipca * ((1 + taxa_mensal) ** meses)
 
-        st.write(f'IPCA acumulado no período: {ipca_acumulado:.4%}')
-        st.write(f'Valor corrigido pelo IPCA: R$ {valor_corrigido_ipca:.2f}')
-        st.write(f'Valor corrigido pelo IPCA mais taxa prefixada: R$ {valor_corrigido_taxa:.2f}')
-        st.write('Valores mensais do IPCA no período:')
-        st.dataframe(df_ipca.set_index('data'))
+                st.write(f'IPCA acumulado no período: {ipca_acumulado:.4%}')
+                st.write(f'Valor corrigido pelo IPCA: R$ {valor_corrigido_ipca:.2f}')
+                st.write(f'Valor corrigido pelo IPCA mais taxa prefixada: R$ {valor_corrigido_taxa:.2f}')
+                st.write('Valores mensais do IPCA no período:')
+                st.dataframe(df_ipca.set_index('data'))
