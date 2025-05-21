@@ -48,10 +48,10 @@ def aplicar_taxa_prefixada(valor_corrigido, taxa_aa, meses):
     return valor_corrigido * ((1 + taxa_mensal) ** meses)
 
 def formatar_moeda(valor):
-    return f'R$ {valor:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f'R$ {valor:,.4f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
 
 def formatar_percentual(valor):
-    return f'{valor*100:.2f}%'
+    return f'{valor*100:.4f}%'
 
 def converter_taxa_aa_input(taxa_input):
     if isinstance(taxa_input, str):
