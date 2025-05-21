@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 
+# Função para converter código AAAAMM em datetime
 def codigo_para_datetime(codigo):
     codigo_str = str(codigo)
     ano = int(codigo_str[:4])
@@ -31,17 +32,13 @@ def buscar_indice_mes_anterior(df, data_inicial):
         return None
 
 def calcular_ipca(df, data_inicial, data_final, valor_inicial):
-    # Busca índice do mês anterior ao mês inicial
     indice_mes_anterior = buscar_indice_mes_anterior(df, data_inicial)
     df_periodo = df[(df['data'] >= data_inicial) & (df['data'] <= data_final)].copy()
     if df_periodo.empty or indice_mes_anterior is None:
         return None, None, None, None
     df_periodo = df_periodo.sort_values('data').reset_index(drop=True)
-    # Calcula variação mensal corretamente
     df_periodo['var_mes'] = df_periodo['valor'].pct_change()
-    # Corrige o primeiro mês: variação em relação ao mês anterior ao período
     df_periodo.loc[0, 'var_mes'] = (df_periodo.loc[0, 'valor'] / indice_mes_anterior) - 1
-    # Acumulado: índice final / índice mês anterior ao inicial - 1
     ipca_acumulado = (df_periodo.iloc[-1]['valor'] / indice_mes_anterior) - 1
     valor_corrigido = valor_inicial * (1 + ipca_acumulado)
     return ipca_acumulado, df_periodo, valor_corrigido, indice_mes_anterior
@@ -50,7 +47,14 @@ def aplicar_taxa_prefixada(valor_corrigido, taxa_aa, meses):
     taxa_mensal = (1 + taxa_aa) ** (1/12) - 1
     return valor_corrigido * ((1 + taxa_mensal) ** meses)
 
+def formatar_moeda(valor):
+    return f'R$ {valor:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+def formatar_percentual(valor):
+    return f'{valor*100:.2f}%'
+
 # Interface Streamlit
+st.set_page_config(page_title="Calculadora de Correção pelo IPCA", layout="centered")
 st.title('Calculadora de Correção pelo IPCA (dados IBGE/SIDRA)')
 
 df_ipca = carregar_dados_ipca()
@@ -61,22 +65,24 @@ data_inicial = st.date_input(
     'Data Inicial',
     value=DATA_INICIAL_SERIE,
     min_value=DATA_INICIAL_SERIE,
-    max_value=DATA_FINAL_SERIE
+    max_value=DATA_FINAL_SERIE,
+    format="DD/MM/YYYY"
 )
 data_final = st.date_input(
     'Data Final',
     value=DATA_FINAL_SERIE,
     min_value=DATA_INICIAL_SERIE,
-    max_value=DATA_FINAL_SERIE
+    max_value=DATA_FINAL_SERIE,
+    format="DD/MM/YYYY"
 )
-valor_inicial = st.number_input('Valor a ser corrigido', min_value=0.0, value=1000.0)
-taxa_aa = st.number_input('Taxa anual prefixada (%)', min_value=0.0, value=0.0) / 100
+valor_inicial = st.number_input('Valor a ser corrigido (R$)', min_value=0.0, value=1000.0, format="%.2f")
+taxa_aa = st.number_input('Taxa prefixada anual (%)', min_value=0.0, value=0.0, format="%.2f") / 100
 
 data_inicial_dt = datetime(data_inicial.year, data_inicial.month, 1)
 data_final_dt = datetime(data_final.year, data_final.month, 1)
 
 if data_inicial_dt > data_final_dt:
-    st.error('Data inicial não pode ser superior à data final.')
+    st.error('A data inicial não pode ser posterior à data final.')
 else:
     ipca_acumulado, df_mensal, valor_corrigido_ipca, indice_mes_anterior = calcular_ipca(
         df_ipca, data_inicial_dt, data_final_dt, valor_inicial
@@ -86,13 +92,19 @@ else:
         valor_corrigido_taxa = aplicar_taxa_prefixada(valor_corrigido_ipca, taxa_aa, meses)
         ipca_acumulado_taxa = (valor_corrigido_taxa / valor_inicial) - 1
 
-        st.write(f'IPCA acumulado no período: {ipca_acumulado:.4%}')
-        st.write(f'IPCA acumulado no período mais taxa prefixada: {ipca_acumulado_taxa:.4%}')
-        st.write(f'Valor corrigido pelo IPCA: R$ {valor_corrigido_ipca:.2f}')
-        st.write(f'Valor corrigido pelo IPCA mais taxa prefixada: R$ {valor_corrigido_taxa:.2f}')
-        st.write('Valores mensais do IPCA no período:')
-        st.dataframe(df_mensal[['data', 'valor', 'var_mes']].rename(
-            columns={'data': 'Data', 'valor': 'Índice IPCA', 'var_mes': 'Variação Mensal'}
-        ).set_index('Data'))
+        st.markdown(f"**IPCA acumulado no período:** {formatar_percentual(ipca_acumulado)}")
+        st.markdown(f"**IPCA acumulado no período mais taxa prefixada:** {formatar_percentual(ipca_acumulado_taxa)}")
+        st.markdown(f"**Valor corrigido pelo IPCA:** {formatar_moeda(valor_corrigido_ipca)}")
+        st.markdown(f"**Valor corrigido pelo IPCA mais taxa prefixada:** {formatar_moeda(valor_corrigido_taxa)}")
+        st.markdown("**Valores mensais do IPCA no período:**")
+
+        df_mensal_pt = df_mensal[['data', 'valor', 'var_mes']].copy()
+        df_mensal_pt['data'] = df_mensal_pt['data'].dt.strftime('%m/%Y')
+        df_mensal_pt['valor'] = df_mensal_pt['valor'].map(lambda x: f'{x:.2f}')
+        df_mensal_pt['var_mes'] = df_mensal_pt['var_mes'].map(lambda x: f'{x*100:.2f}%' if pd.notnull(x) else '')
+        df_mensal_pt = df_mensal_pt.rename(
+            columns={'data': 'Mês/Ano', 'valor': 'Índice IPCA', 'var_mes': 'Variação Mensal'}
+        ).set_index('Mês/Ano')
+        st.dataframe(df_mensal_pt)
     else:
         st.warning('Não há dados disponíveis para o período selecionado ou para o mês anterior ao inicial.')
